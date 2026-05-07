@@ -1,97 +1,81 @@
 # ResNet Training Configuration for Food Spoilage Detection
-# This configuration file contains all parameters for training the ResNet model
 
-# Model Configuration
 model:
-  architecture: resnet50      # ResNet variant (resnet18, resnet34, resnet50, resnet101, resnet152)
-  pretrained: true           # Use pretrained weights from ImageNet
-  num_classes: 2             # Number of output classes (fresh, spoiled)
-  dropout: 0.5               # Dropout rate for regularization
+  architecture: resnet50
+  pretrained: true
+  num_classes: 2
+  dropout: 0.5
 
-# Dataset Configuration
 data:
-  train_dir: data/resnet_dataset/train
-  val_dir: data/resnet_dataset/val
-  test_dir: data/resnet_dataset/test
-  image_size: 224            # Input image size (224x224 for ResNet)
-  num_workers: 4             # Number of worker threads for data loading
+  train_dir: data/resnet_dataset/Train
+  val_dir: data/resnet_dataset/Val
+  test_dir: data/resnet_dataset/Test
+  image_size: 224
+  num_workers: 4            # was 2 — more CPU threads feeding GPU
 
-# Training Parameters
 training:
-  epochs: 50                 # Number of training epochs
-  batch_size: 32             # Batch size for training
-  learning_rate: 0.001       # Initial learning rate
-  weight_decay: 0.0001       # L2 regularization weight decay
-  momentum: 0.9              # SGD momentum
+  epochs: 50
+  batch_size: 32          # was 8 — 4x fewer steps per epoch, much faster
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  momentum: 0.9
 
-# Optimizer Configuration
 optimizer:
-  type: Adam                 # Optimizer type (Adam, SGD, AdamW)
-  betas: [0.9, 0.999]       # Adam beta parameters
-  eps: 1.0e-08              # Adam epsilon for numerical stability
+  type: Adam
+  betas: [0.9, 0.999]
+  eps: 1.0e-08
 
-# Learning Rate Scheduler
 scheduler:
-  type: StepLR              # Scheduler type (StepLR, ReduceLROnPlateau, CosineAnnealingLR)
-  step_size: 10             # Period of learning rate decay (for StepLR)
-  gamma: 0.1                # Multiplicative factor of learning rate decay
-  patience: 5               # Patience for ReduceLROnPlateau
-  min_lr: 1.0e-06          # Minimum learning rate
+  type: StepLR
+  step_size: 10
+  gamma: 0.5                # Halves LR each step (was 0.1 which collapsed LR to near-zero by epoch 30)
+  patience: 5
+  min_lr: 1.0e-06
 
-# Data Augmentation
 augmentation:
-  # Training augmentations
-  random_rotation: 15       # Random rotation degree range
-  random_flip: true         # Random horizontal flip
+  random_rotation: 15
+  random_flip: true
   color_jitter:
-    brightness: 0.2         # Brightness adjustment
-    contrast: 0.2           # Contrast adjustment
-    saturation: 0.2         # Saturation adjustment
-    hue: 0.1                # Hue adjustment
-  random_crop: true         # Random crop
+    brightness: 0.2
+    contrast: 0.2
+    saturation: 0.2
+    hue: 0.05
+  random_crop: true
   normalize:
-    mean: [0.485, 0.456, 0.406]  # ImageNet normalization mean
-    std: [0.229, 0.224, 0.225]   # ImageNet normalization std
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
 
-# Loss Function
 loss:
-  type: CrossEntropyLoss    # Loss function type
-  label_smoothing: 0.1      # Label smoothing factor
+  type: CrossEntropyLoss
+  label_smoothing: 0.1
 
-# Early Stopping
 early_stopping:
-  enabled: true             # Enable early stopping
-  patience: 10              # Number of epochs with no improvement to wait
-  min_delta: 0.001          # Minimum change to qualify as improvement
+  enabled: true
+  patience: 10
+  min_delta: 0.001
 
-# Checkpointing
 checkpoint:
-  save_best_only: true      # Save only the best model
-  save_dir: models          # Directory to save models
-  save_frequency: 5         # Save checkpoint every N epochs
-  monitor: val_accuracy     # Metric to monitor for best model
+  save_best_only: true
+  save_dir: models
+  save_frequency: 5
+  monitor: val_accuracy
 
-# Output Configuration
 output:
-  project: runs/resnet      # Project directory for saving results
-  name: resnet_train        # Name of the training run
-  save_plots: true          # Save training plots
-  verbose: true             # Verbose output
+  project: runs/resnet
+  name: resnet_train
+  save_plots: true
+  verbose: true
 
-# Device Configuration
-device: cuda               # Device to use (cuda, cpu, or cuda:0, cuda:1, etc.)
-seed: 42                   # Random seed for reproducibility
+device: cuda
+seed: 42
 
-# Validation Settings
 validation:
-  enabled: true             # Enable validation during training
-  frequency: 1              # Validate every N epochs
+  enabled: true
+  frequency: 1
 
-# Mixed Precision Training
 mixed_precision:
-  enabled: false            # Enable automatic mixed precision training
-  
-# Gradient Clipping
+  enabled: true
+
 gradient_clipping:
-  enabled: false            # Enable gradient clipping
-  max_norm: 1.0            # Maximum gradient norm
+  enabled: true
+  max_norm: 1.0

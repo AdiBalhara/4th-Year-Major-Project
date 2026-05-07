@@ -209,6 +209,9 @@ class ResNetPredictor:
                 'spoiled': probabilities[0, 1].item()
             }
         
+        # Freshness percentage: 0.0 (fully spoiled) to 100.0 (fully fresh)
+        result['freshness_percentage'] = round(probabilities[0, 0].item() * 100, 2)
+        
         return result
     
     @torch.no_grad()
@@ -297,12 +300,10 @@ class ResNetPredictor:
             
             image = image[y1:y2, x1:x2]
         
-        # Convert numpy array to PIL Image
+        # Convert numpy array to PIL Image.
+        # Input MUST be RGB — the pipeline converts BGR→RGB before cropping,
+        # matching the RGB colour space used by PIL/ImageFolder during training.
         if image.dtype == np.uint8:
-            # Handle BGR to RGB conversion if needed
-            if len(image.shape) == 3 and image.shape[2] == 3:
-                # Assume BGR from OpenCV, convert to RGB
-                image = image[:, :, ::-1]
             pil_image = Image.fromarray(image)
         else:
             raise ValueError("Image must be uint8 numpy array")

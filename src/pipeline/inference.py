@@ -277,6 +277,7 @@ class FoodSpoilagePipeline:
                     'spoilage_status': classification['class'],
                     'spoilage_confidence': classification['confidence'],
                     'spoilage_probabilities': classification['probabilities'],
+                    'freshness_percentage': classification['freshness_percentage'],
                     'combined_confidence': (det['confidence'] + classification['confidence']) / 2
                 }
                 

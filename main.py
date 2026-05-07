@@ -38,10 +38,10 @@ def print_banner():
     banner = """
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║       Food Spoilage Detection System                    ║
-    ║       Two-Stage Detection & Classification              ║
+    ║       Food Spoilage Detection System                     ║
+    ║       Two-Stage Detection & Classification               ║
     ║                                                          ║
-    ║       YOLO (Detection) + ResNet (Classification)        ║
+    ║       YOLO (Detection) + ResNet (Classification)         ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
     """

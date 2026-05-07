@@ -14,19 +14,19 @@ models:
 
 # YOLO Detection Configuration
 yolo_detection:
-  confidence_threshold: 0.25            # Minimum confidence for detections
+  confidence_threshold: 0.40            # Minimum confidence for detections
   iou_threshold: 0.45                   # IoU threshold for NMS
   max_detections: 100                   # Maximum number of detections per image
   image_size: 640                       # Input image size
   classes: null                         # Specific classes to detect (null = all)
   agnostic_nms: false                   # Class-agnostic NMS
-  device: cuda                          # Device (cuda/cpu)
+  device: cpu                           # Device (cuda/cpu)
 
 # ResNet Classification Configuration
 resnet_classification:
   image_size: 224                       # Input image size for ResNet
   confidence_threshold: 0.5             # Minimum confidence for classification
-  device: cuda                          # Device (cuda/cpu)
+  device: cpu                           # Device (cuda/cpu)
   batch_size: 8                         # Batch size for processing multiple crops
   normalize:
     mean: [0.485, 0.456, 0.406]        # ImageNet normalization mean

@@ -257,9 +257,9 @@ class ResNetEvaluator:
         # Per-class accuracy
         per_class_accuracy = conf_matrix.diagonal() / conf_matrix.sum(axis=1)
         
-        # Class distribution
+        # Class distribution (convert numpy int64 keys/values to plain Python int)
         unique, counts = np.unique(labels, return_counts=True)
-        class_distribution = dict(zip(unique, counts))
+        class_distribution = {int(k): int(v) for k, v in zip(unique, counts)}
         
         # Organize metrics
         metrics = {

@@ -9,10 +9,13 @@ and metrics tracking.
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.amp import GradScaler, autocast
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import datasets, transforms
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
+import os
+import shutil
 import sys
 import time
 import json
@@ -82,6 +85,13 @@ class ResNetTrainer:
         self.criterion = self._setup_criterion()
         self.optimizer = self._setup_optimizer()
         self.scheduler = self._setup_scheduler()
+        
+        # Mixed precision scaler
+        amp_enabled = self.config.get('mixed_precision', {}).get('enabled', False)
+        self.use_amp = amp_enabled and self.device.type == 'cuda'
+        self.scaler = GradScaler('cuda') if self.use_amp else None
+        if self.use_amp:
+            self.logger.info("Mixed precision (AMP) enabled")
         
         # Training state
         self.current_epoch = 0
@@ -161,6 +171,19 @@ class ResNetTrainer:
         self.logger.info(f"Training samples: {len(train_dataset)}")
         self.logger.info(f"Classes: {train_dataset.classes}")
         
+        # Class imbalance: compute inverse-frequency weights for WeightedRandomSampler
+        class_counts = [0] * len(train_dataset.classes)
+        for _, label in train_dataset.samples:
+            class_counts[label] += 1
+        class_weights = [1.0 / count for count in class_counts]
+        sample_weights = [class_weights[label] for _, label in train_dataset.samples]
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(train_dataset),
+            replacement=True
+        )
+        self.logger.info(f"Class counts: { {cls: cnt for cls, cnt in zip(train_dataset.classes, class_counts)} }")
+        
         # Validation dataset
         val_loader = None
         if self.config.get('validation', {}).get('enabled', True):
@@ -173,18 +196,20 @@ class ResNetTrainer:
                     batch_size=train_config.get('batch_size', 32),
                     shuffle=False,
                     num_workers=data_config.get('num_workers', 4),
-                    pin_memory=True
+                    pin_memory=True,
+                    persistent_workers=True
                 )
             else:
                 self.logger.warning(f"Validation directory not found: {val_dir}")
         
-        # Training loader
+        # Training loader (sampler provides balanced sampling; shuffle is incompatible with sampler)
         train_loader = DataLoader(
             train_dataset,
             batch_size=train_config.get('batch_size', 32),
-            shuffle=True,
+            sampler=sampler,
             num_workers=data_config.get('num_workers', 4),
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=True
         )
         
         return train_loader, val_loader
@@ -194,12 +219,12 @@ class ResNetTrainer:
         image_size = data_config.get('image_size', 224)
         transform_list = []
         
-        # Resize
-        transform_list.append(transforms.Resize((image_size, image_size)))
+        # Resize to slightly larger than target so RandomCrop samples different spatial regions
+        transform_list.append(transforms.Resize((image_size + 32, image_size + 32)))
         
-        # Random crop
+        # Random crop to final size (genuine spatial diversity, no zero-padding needed)
         if aug_config.get('random_crop', True):
-            transform_list.append(transforms.RandomCrop(image_size, padding=4))
+            transform_list.append(transforms.RandomCrop(image_size))
         
         # Random horizontal flip
         if aug_config.get('random_flip', True):
@@ -328,22 +353,29 @@ class ResNetTrainer:
         progress_bar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}")
         
         for images, labels in progress_bar:
-            images, labels = images.to(self.device), labels.to(self.device)
+            images, labels = images.to(self.device, non_blocking=True), labels.to(self.device, non_blocking=True)
             
-            # Forward pass
-            self.optimizer.zero_grad()
-            outputs = self.model(images)
-            loss = self.criterion(outputs, labels)
+            self.optimizer.zero_grad(set_to_none=True)
             
-            # Backward pass
-            loss.backward()
-            
-            # Gradient clipping if enabled
-            if self.config.get('gradient_clipping', {}).get('enabled', False):
-                max_norm = self.config['gradient_clipping'].get('max_norm', 1.0)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm)
-            
-            self.optimizer.step()
+            if self.use_amp:
+                with autocast('cuda'):
+                    outputs = self.model(images)
+                    loss = self.criterion(outputs, labels)
+                self.scaler.scale(loss).backward()
+                if self.config.get('gradient_clipping', {}).get('enabled', False):
+                    max_norm = self.config['gradient_clipping'].get('max_norm', 1.0)
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                outputs = self.model(images)
+                loss = self.criterion(outputs, labels)
+                loss.backward()
+                if self.config.get('gradient_clipping', {}).get('enabled', False):
+                    max_norm = self.config['gradient_clipping'].get('max_norm', 1.0)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm)
+                self.optimizer.step()
             
             # Statistics
             total_loss += loss.item() * images.size(0)
@@ -374,7 +406,7 @@ class ResNetTrainer:
         total = 0
         
         for images, labels in tqdm(self.val_loader, desc="Validating"):
-            images, labels = images.to(self.device), labels.to(self.device)
+            images, labels = images.to(self.device, non_blocking=True), labels.to(self.device, non_blocking=True)
             
             outputs = self.model(images)
             loss = self.criterion(outputs, labels)
@@ -396,21 +428,26 @@ class ResNetTrainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+            'scaler_state_dict': self.scaler.state_dict() if self.scaler else None,
             'best_val_accuracy': self.best_val_accuracy,
             'best_val_loss': self.best_val_loss,
             'history': self.history,
             'config': self.config
         }
         
-        # Save checkpoint
+        # Save checkpoint atomically (temp file → rename) to avoid file-lock errors
         checkpoint_path = self.checkpoint_dir / filename
-        torch.save(checkpoint, checkpoint_path)
+        tmp_checkpoint = checkpoint_path.with_suffix('.tmp')
+        torch.save(checkpoint, tmp_checkpoint)
+        shutil.move(str(tmp_checkpoint), str(checkpoint_path))
         self.logger.info(f"Checkpoint saved: {checkpoint_path}")
         
-        # Save best model
+        # Save best model atomically
         if is_best:
             best_path = self.checkpoint_dir / 'resnet_spoilage.pt'
-            torch.save(self.model.state_dict(), best_path)
+            tmp_best = best_path.with_suffix('.tmp')
+            torch.save(self.model.state_dict(), tmp_best)
+            shutil.move(str(tmp_best), str(best_path))
             self.logger.info(f"Best model saved: {best_path}")
     
     def _load_checkpoint(self, checkpoint_path: str):
@@ -427,6 +464,9 @@ class ResNetTrainer:
         if self.scheduler and checkpoint.get('scheduler_state_dict'):
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         
+        if self.scaler and checkpoint.get('scaler_state_dict'):
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
         self.current_epoch = checkpoint.get('epoch', 0)
         self.best_val_accuracy = checkpoint.get('best_val_accuracy', 0.0)
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
@@ -435,8 +475,8 @@ class ResNetTrainer:
         self.logger.info(f"Resumed from checkpoint: {checkpoint_path}")
         self.logger.info(f"Starting from epoch {self.current_epoch + 1}")
     
-    def _check_early_stopping(self, val_loss: float) -> bool:
-        """Check if early stopping criteria is met."""
+    def _check_early_stopping(self, val_accuracy: float) -> bool:
+        """Check if early stopping criteria is met (monitors val_accuracy, higher is better)."""
         early_stop_config = self.config.get('early_stopping', {})
         
         if not early_stop_config.get('enabled', True):
@@ -445,7 +485,7 @@ class ResNetTrainer:
         patience = early_stop_config.get('patience', 10)
         min_delta = early_stop_config.get('min_delta', 0.001)
         
-        if val_loss < (self.best_val_loss - min_delta):
+        if val_accuracy > (self.best_val_accuracy + min_delta):
             self.early_stop_counter = 0
         else:
             self.early_stop_counter += 1
@@ -534,7 +574,7 @@ class ResNetTrainer:
                         self.save_checkpoint(is_best=is_best, filename=f'checkpoint_epoch_{epoch + 1}.pt')
                 
                 # Early stopping
-                if self.val_loader and self._check_early_stopping(val_loss):
+                if self.val_loader and self._check_early_stopping(val_acc):
                     break
             
             # Training completed
