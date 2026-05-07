@@ -184,7 +184,13 @@ async function _callRealApi(imageData) {
     const apiUrl = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL 
       ? import.meta.env.VITE_API_URL 
       : API_BASE;
-    res = await fetch(`${apiUrl}/predict`, { method: 'POST', body: formData });
+    res = await fetch(`${apiUrl}/predict`, { 
+      method: 'POST', 
+      body: formData,
+      headers: {
+        'Bypass-Tunnel-Reminder': 'true' // For localtunnel compatibility
+      }
+    });
   } catch (error) {
     console.warn("Real API unavailable or blocked. Falling back to mock data.", error);
     const fallback = _fallbackFromFilename(imageData);
